@@ -1,27 +1,41 @@
 package com.knowtech.scanassist
 
-import android.content.ComponentCallbacks2
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
-import android.util.Log
-import android.widget.Spinner
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import com.knowtech.scanassist.databinding.ActivityMainBinding
+import com.knowtech.scanassist.utils.CURRENT_IMAGE_TYPE
+import com.knowtech.scanassist.utils.FILE_PROVIDER_AUTHORITY
+import com.knowtech.scanassist.utils.REQUEST_DOCUMENT_IMAGE_CAPTURE
 import org.opencv.android.BaseLoaderCallback
-import org.opencv.android.CameraBridgeViewBase
 import org.opencv.android.LoaderCallbackInterface
 import org.opencv.android.OpenCVLoader
-import org.opencv.core.*
+import org.opencv.android.Utils
+import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
+import java.io.File
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.*
 
-class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListener2 {
+
+class MainActivity : AppCompatActivity(){
     private lateinit var binding: ActivityMainBinding
-    private lateinit var spinner : Spinner
+    private lateinit var mTempImagePath: String
+    private lateinit var raw_bitmap: Bitmap
+    private lateinit var mat : Mat
     private val baseLoaderCallback by lazy {
+
         object : BaseLoaderCallback(this) {
             override fun onManagerConnected(status: Int) {
                 when (status) {
-                    SUCCESS -> binding.cameraView.enableView()
+                    SUCCESS ->  mat = Mat()
                     else -> super.onManagerConnected(status)
                 }
             }
@@ -32,93 +46,13 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        binding.cameraView.setCameraPermissionGranted()
-        binding.cameraView.setCvCameraViewListener(this)
 
-
+        binding.cameraBtn.setOnClickListener{ openCamera()  }
+        binding.processBtn.setOnClickListener { processImage(raw_bitmap) }
 
     }
-
-    private var mRgba: Mat? = null
-    private var mRgbaT: Mat? = null
-    private var dst: Mat? = null
-    private var tempMat: Mat? = null
-    private var rotatedMat: Mat? = null
-    val list = mutableListOf<MatOfPoint>()
-
-    val newMat by lazy { MatOfPoint2f() }
-    val approx by lazy { MatOfPoint2f() }
-    var area = 0.0
-    var maxArea = 0.0
-    var peri = 0.0
-    var scalar = Scalar(0.0, 255.0, 0.0)
-    var kSize = Size(5.0, 5.0)
-    var rect: Rect? = null
-
-    override fun onCameraViewStarted(width: Int, height: Int) {
-        mRgba = Mat(height, width, CvType.CV_8UC4)
-        mRgbaT = Mat()
-        dst = Mat()
-    }
-
-    override fun onCameraViewStopped() {
-        mRgba?.release()
-        mRgbaT?.release()
-        dst?.release()
-    }
-
-    override fun onCameraFrame(inputFrame: CameraBridgeViewBase.CvCameraViewFrame?): Mat {
-        inputFrame?.let {
-            mRgba = inputFrame.rgba()
-            tempMat = mRgba?.t()
-            Core.flip(tempMat, mRgbaT, 1)
-            Imgproc.resize(mRgbaT, dst, mRgba?.size())
-            rotatedMat = dst?.clone()
-            Imgproc.cvtColor(dst, dst, Imgproc.COLOR_BGR2GRAY)
-            Imgproc.GaussianBlur(dst, dst, kSize, 0.0)
-            Imgproc.Canny(dst, dst, 75.0, 200.0)
-            list.clear()
-            Imgproc.findContours(dst, list, dst, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-            findBiggestContour()?.let {
-                Imgproc.drawContours(rotatedMat, listOf(it), -1, scalar, 2)
-                it.release()
-                maxArea = 0.0
-            }
-            tempMat?.release()
-            dst?.release()
-            return rotatedMat!!
-        }
-        return Mat()
-    }
-
-    private fun findBiggestContour(): MatOfPoint? {
-        list.forEach { mat ->
-            mat.convertTo(newMat, CvType.CV_32F)
-            area = Imgproc.contourArea(mat)
-            if (area > 200) {
-                peri = Imgproc.arcLength(newMat, true)
-                Imgproc.approxPolyDP(newMat, approx, 0.02 * peri, true)
-                Log.d("bytescanValues", approx.toArray().toString())
-                if (area > maxArea && approx.toList().size == 4) {
-                    rect = Imgproc.boundingRect(approx)
-                    rect?.let {
-                        maxArea = area
-                        newMat.release()
-                        approx.convertTo(mat, CvType.CV_32S)
-                        approx.release()
-                        return mat
-                    }
-                }
-            }
-            newMat.release()
-            approx.release()
-        }
-        return null
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        binding.cameraView?.disableView()
     }
 
 
@@ -130,24 +64,64 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
         } else {
             Toast.makeText(this, "Failed", Toast.LENGTH_LONG).show()
             OpenCVLoader.initAsync(
-                OpenCVLoader.OPENCV_VERSION,
-                this,
-                baseLoaderCallback
+                    OpenCVLoader.OPENCV_VERSION,
+                    this,
+                    baseLoaderCallback
             )
         }
     }
 
-    override fun onTrimMemory(level: Int) {
-        when (level) {
-            ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> {
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if(requestCode==REQUEST_DOCUMENT_IMAGE_CAPTURE && resultCode== RESULT_OK){
+            val options = BitmapFactory.Options()
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888
+            raw_bitmap= BitmapFactory.decodeFile(mTempImagePath, options)
+            binding.documentImg.setImageBitmap(raw_bitmap)
+        }
+    }
+
+    private fun openCamera(){
+        val pictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if(pictureIntent.resolveActivity(packageManager)!= null){
+            var photoFile : File? = null
+            try{
+                photoFile = createTempImageFile()
+            }catch (ex: IOException){
+                ex.printStackTrace()
             }
-            ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE, ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW, ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
-            }
-            ComponentCallbacks2.TRIM_MEMORY_BACKGROUND, ComponentCallbacks2.TRIM_MEMORY_MODERATE, ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> {
+            if(photoFile!=null){
+                mTempImagePath =photoFile.absolutePath
+                val pictureUri : Uri = FileProvider.getUriForFile(
+                    this,
+                    FILE_PROVIDER_AUTHORITY,
+                    photoFile
+                )
+                pictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, pictureUri)
+                startActivityForResult(pictureIntent, REQUEST_DOCUMENT_IMAGE_CAPTURE)
             }
 
-            else -> {
-            }
         }
+
+    }
+
+    private fun createTempImageFile() : File {
+        val timeStamp : String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(
+            Date()
+        )
+        val imageFileName = "JPEG_$timeStamp"
+        val storageDir : File? =externalCacheDir
+        return File.createTempFile(imageFileName, ".jpg", storageDir)
+    }
+
+
+    private fun processImage (bitmap: Bitmap){
+        val mat = Mat()
+        var processed_bitmap: Bitmap? = raw_bitmap
+        Utils.bitmapToMat(bitmap,mat)
+        Imgproc.cvtColor(mat,mat, CURRENT_IMAGE_TYPE)
+        Utils.matToBitmap(mat,processed_bitmap)
+        binding.documentImg.setImageBitmap(processed_bitmap)
+
     }
 }
